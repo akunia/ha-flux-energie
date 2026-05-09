@@ -21,8 +21,8 @@ A custom Lovelace card for Home Assistant that visualizes household energy flow 
 
 ### HACS (custom repository) — recommended
 
-1. In HACS → **Frontend** → ⋮ menu → **Custom repositories**
-2. Add `https://github.com/akunia/ha-flux-energie` with category **Lovelace**
+1. In HACS → ⋮ menu → **Custom repositories**
+2. Add `https://github.com/akunia/ha-flux-energie` with type **Dashboard** (this used to be called "Lovelace" in older HACS versions)
 3. Install **Flux Énergie Card** from the list
 4. Hard-refresh your browser (Ctrl + Shift + R)
 
