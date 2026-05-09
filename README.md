@@ -2,7 +2,7 @@
 
 A custom Lovelace card for Home Assistant that visualizes household energy flow as a hub-and-spoke diagram with an **autarky ring** at the center and animated arrows whose speed scales with power.
 
-![Battery modes preview](docs/preview-battery-modes.jpeg)
+![Flux Énergie Card running on a live dashboard](docs/preview-card.png)
 
 ## Features
 
@@ -94,6 +94,8 @@ extra:
 ```
 
 ### Box+ as a Battery box
+
+![Battery mode — charge / discharge / split-sensors / mono regression](docs/preview-battery-modes.jpeg)
 
 ```yaml
 type: custom:flux-energie-card
