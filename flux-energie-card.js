@@ -1085,40 +1085,29 @@ class FluxEnergieCardEditor extends LitElement {
       </label>
     `;
 
-    // Entity picker — uses HA's native <ha-entity-picker> instead of an
-    // HTML5 <input list=datalist>. The datalist version broke on Android
-    // (the keyboard suggestion bar replaced the popup). The native HA
-    // picker works on desktop, web, and mobile (incl. Pixel/Android).
-    const entityFilterFor = (group) => {
-      if (group === "power") {
-        return (state) => {
-          const u  = state.attributes?.unit_of_measurement;
-          const dc = state.attributes?.device_class;
-          return POWER_UNITS.has(u) && (!dc || dc === "power") && !FORECAST_RE.test(state.entity_id);
-        };
-      }
-      if (group === "energy") {
-        return (state) => {
-          const u  = state.attributes?.unit_of_measurement;
-          const dc = state.attributes?.device_class;
-          return ENERGY_UNITS.has(u) && (!dc || dc === "energy") && !FORECAST_RE.test(state.entity_id);
-        };
-      }
-      return undefined;
+    // Entity picker — uses HA's <ha-form> with an entity selector. <ha-form>
+    // ships with the HA frontend and is always preloaded, unlike
+    // <ha-entity-picker> which is lazy-loaded only when a built-in config
+    // dialog opens (and was therefore invisible in this editor on Android).
+    // Filtering by device_class covers the bulk of W vs kWh entities; we
+    // also slot in domain=sensor so non-sensor entities never appear.
+    const entitySelector = (group) => {
+      if (group === "power")  return { entity: { domain: "sensor", device_class: "power" } };
+      if (group === "energy") return { entity: { domain: "sensor", device_class: "energy" } };
+      return { entity: { domain: "sensor" } };
     };
-    const ent = (label, value, handler, group) => html`
-      <label class="field">
-        <span class="field-label">${label}</span>
-        <ha-entity-picker
+    const ent = (label, value, handler, group) => {
+      const schema = [{ name: "v", selector: entitySelector(group) }];
+      return html`
+        <ha-form
           .hass=${this.hass}
-          .value=${value || ""}
-          .includeDomains=${["sensor"]}
-          .entityFilter=${entityFilterFor(group)}
-          allow-custom-entity
-          @value-changed=${(ev) => handler({ detail: { value: ev.detail.value } })}
-        ></ha-entity-picker>
-      </label>
-    `;
+          .data=${{ v: value || "" }}
+          .schema=${schema}
+          .computeLabel=${() => label}
+          @value-changed=${(ev) => handler({ detail: { value: ev.detail.value.v } })}
+        ></ha-form>
+      `;
+    };
 
     // Color picker — stores hex (#rrggbb). Falls back to default RGB on display.
     const _toHex = (v) => {
