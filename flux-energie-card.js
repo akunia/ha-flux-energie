@@ -1065,30 +1065,12 @@ class FluxEnergieCardEditor extends LitElement {
     const L = this._config.labels || {};
     const T = this._config.top_label || {};
 
-    // Group sensors by unit_of_measurement so we can offer filtered datalists
-    // per slot (W vs kWh) instead of one massive list with everything.
-    // Strict filter: exclude forecast/prediction sensors (Solcast etc.) and
-    // require device_class to match if it's set.
+    // Filter sets used by ha-entity-picker's entityFilter callback. Strict
+    // rule: exclude forecast/prediction sensors (Solcast etc.) and require
+    // device_class to match if it's set.
     const POWER_UNITS  = new Set(["W", "kW", "mW", "MW"]);
     const ENERGY_UNITS = new Set(["Wh", "kWh", "MWh"]);
     const FORECAST_RE  = /forecast|predict|estimate|prevision|prediction/i;
-    const sensorsByGroup = { power: [], energy: [], all: [] };
-    if (this.hass && this.hass.states) {
-      const ids = Object.keys(this.hass.states).filter(id => id.startsWith("sensor.")).sort();
-      for (const id of ids) {
-        const attrs = this.hass.states[id].attributes || {};
-        const unit = attrs.unit_of_measurement;
-        const dc   = attrs.device_class;
-        sensorsByGroup.all.push(id);
-        if (FORECAST_RE.test(id)) continue;
-        if (POWER_UNITS.has(unit) && (!dc || dc === "power")) {
-          sensorsByGroup.power.push(id);
-        } else if (ENERGY_UNITS.has(unit) && (!dc || dc === "energy")) {
-          sensorsByGroup.energy.push(id);
-        }
-      }
-    }
-    const DATALIST = { power: "flux-sensors-power", energy: "flux-sensors-energy", all: "flux-sensors-all" };
 
     const txt = (label, value, placeholder, handler, type) => html`
       <label class="field">
@@ -1103,17 +1085,38 @@ class FluxEnergieCardEditor extends LitElement {
       </label>
     `;
 
-    const ent = (label, value, handler, listId) => html`
+    // Entity picker — uses HA's native <ha-entity-picker> instead of an
+    // HTML5 <input list=datalist>. The datalist version broke on Android
+    // (the keyboard suggestion bar replaced the popup). The native HA
+    // picker works on desktop, web, and mobile (incl. Pixel/Android).
+    const entityFilterFor = (group) => {
+      if (group === "power") {
+        return (state) => {
+          const u  = state.attributes?.unit_of_measurement;
+          const dc = state.attributes?.device_class;
+          return POWER_UNITS.has(u) && (!dc || dc === "power") && !FORECAST_RE.test(state.entity_id);
+        };
+      }
+      if (group === "energy") {
+        return (state) => {
+          const u  = state.attributes?.unit_of_measurement;
+          const dc = state.attributes?.device_class;
+          return ENERGY_UNITS.has(u) && (!dc || dc === "energy") && !FORECAST_RE.test(state.entity_id);
+        };
+      }
+      return undefined;
+    };
+    const ent = (label, value, handler, group) => html`
       <label class="field">
         <span class="field-label">${label}</span>
-        <input
-          class="field-input"
-          type="text"
-          list=${listId || DATALIST.all}
+        <ha-entity-picker
+          .hass=${this.hass}
           .value=${value || ""}
-          placeholder="sensor.xxx"
-          @input=${(ev) => handler({ detail: { value: ev.target.value } })}
-        />
+          .includeDomains=${["sensor"]}
+          .entityFilter=${entityFilterFor(group)}
+          allow-custom-entity
+          @value-changed=${(ev) => handler({ detail: { value: ev.detail.value } })}
+        ></ha-entity-picker>
       </label>
     `;
 
@@ -1281,7 +1284,7 @@ class FluxEnergieCardEditor extends LitElement {
               </label>
               ${isBatteryNode ? html`<div class="hint">Remplis <strong>soit</strong> la puissance signée (+ charge / − décharge) <strong>soit</strong> les deux capteurs charge/décharge séparés. Le SoC et les kWh journaliers sont toujours nécessaires.</div>` : ""}
             ` : ""}
-            ${sensorsToShow.map(s => ent(s.label, E[s.key], (ev) => this._entityChanged(s.key, ev), DATALIST[s.group] || DATALIST.all))}
+            ${sensorsToShow.map(s => ent(s.label, E[s.key], (ev) => this._entityChanged(s.key, ev), s.group))}
             ${node.appearance === "full" ? html`
               ${txt("Label", labelVal, labelDefault, labelHandler)}
               ${isExtra && isBatteryNode ? html`
@@ -1310,15 +1313,6 @@ class FluxEnergieCardEditor extends LitElement {
     };
 
     return html`
-      <datalist id=${DATALIST.power}>
-        ${sensorsByGroup.power.map(id => html`<option value=${id}></option>`)}
-      </datalist>
-      <datalist id=${DATALIST.energy}>
-        ${sensorsByGroup.energy.map(id => html`<option value=${id}></option>`)}
-      </datalist>
-      <datalist id=${DATALIST.all}>
-        ${sensorsByGroup.all.map(id => html`<option value=${id}></option>`)}
-      </datalist>
       <div class="form">
         <div class="section-title">Nodes</div>
         <div class="hint">Clique sur une ligne pour configurer ses sensors et son apparence. Vide les <strong>deux</strong> sensors d'un node pour le masquer sur la carte (Maison reste obligatoire).</div>
