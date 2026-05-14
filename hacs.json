@@ -1,5 +1,6 @@
 {
   "name": "Flux Énergie Card",
   "filename": "flux-energie-card.js",
-  "render_readme": true
+  "render_readme": true,
+  "homeassistant": "2024.1.0"
 }

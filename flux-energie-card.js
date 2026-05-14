@@ -1,10 +1,20 @@
 /**
- * flux-energie-card v0.8.0
+ * flux-energie-card v0.9.3
  * Hub-and-spoke energy flow visualization for Home Assistant.
  * Five fixed nodes (Solar / Import / Export / Cumulus / EV) around a central
  * Maison ring showing autarky %. Optional 6th box (Box+) supports a Battery
  * mode with auto-detected charge/discharge direction, SoC % and daily ↑/↓ kWh.
  * Includes a UI editor (no YAML required).
+ *
+ * v0.9.0 forum-driven additions (post 79568):
+ *   • background color customization (config.background)
+ *   • per-node tap_action / hold_action with full HA action schema
+ *   • mobile scroll-vs-tap disambiguation (touchmove > 10px cancels press)
+ *
+ * v0.9.1 layout extension:
+ *   • optional 7th box "Box++" at bottom-center (between Voiture and Export),
+ *     wired via extra2_w / extra2_kwh entities and config.extra2 (label/icon/
+ *     color). Keeps the existing Box+ slot (mid-right) reserved for batteries.
  */
 
 import {
@@ -14,7 +24,7 @@ import {
 } from "https://unpkg.com/lit-element@2.5.1/lit-element.js?module";
 import { unsafeHTML as _unsafeHTML } from "https://unpkg.com/lit-html@1.4.1/directives/unsafe-html.js?module";
 
-const VERSION = "0.8.0";
+const VERSION = "0.9.3";
 
 console.info(
   `%c FLUX-ENERGIE-CARD %c ${VERSION} `,
@@ -104,7 +114,7 @@ const DEFAULT_LABELS = {
 // =========================================================================
 // SVG generator (pure function: state → string)
 // =========================================================================
-function generateSVG(state, colors = DEFAULT_COLORS, icons = ICONS, extra = null, fonts = DEFAULT_FONTS, labels = DEFAULT_LABELS, topLabel = null, flowStyle = DEFAULT_FLOW_STYLE) {
+function generateSVG(state, colors = DEFAULT_COLORS, icons = ICONS, extra = null, fonts = DEFAULT_FONTS, labels = DEFAULT_LABELS, topLabel = null, flowStyle = DEFAULT_FLOW_STYLE, extra2 = null) {
   // Accept colors as either "#rrggbb" hex or legacy "r,g,b" string. Normalize to "r,g,b".
   const _toRgbStr = (c) => {
     if (!c) return "0,0,0";
@@ -126,6 +136,12 @@ function generateSVG(state, colors = DEFAULT_COLORS, icons = ICONS, extra = null
       color:           extra.color           ? _toRgbStr(extra.color)           : DEFAULT_EXTRA.color,
       charge_color:    extra.charge_color    ? _toRgbStr(extra.charge_color)    : DEFAULT_EXTRA.charge_color,
       discharge_color: extra.discharge_color ? _toRgbStr(extra.discharge_color) : DEFAULT_EXTRA.discharge_color,
+    };
+  }
+  if (extra2) {
+    extra2 = {
+      ...extra2,
+      color: extra2.color ? _toRgbStr(extra2.color) : DEFAULT_EXTRA.color,
     };
   }
   const F_W_LINE = fonts.w_label_line ?? DEFAULT_FONTS.w_label_line;
@@ -171,6 +187,10 @@ function generateSVG(state, colors = DEFAULT_COLORS, icons = ICONS, extra = null
   const xW   = extra ? (isBattery ? Math.abs(xNetW) : state.extra_w)              : 0;
   const xKwh = extra ? (isBattery ? "0"             : state.extra_kwh.toFixed(1)) : "0";
   const lMaisonExtra = xW;
+  // extra2 is always mono (no battery mode) — bottom-center optional 7th box.
+  const x2W   = extra2 ? state.extra2_w : 0;
+  const x2Kwh = extra2 ? state.extra2_kwh.toFixed(1) : "0";
+  const lMaisonExtra2 = x2W;
 
   const isOn  = (w) => w > 0;
   const wDisp = (w) => w;
@@ -198,7 +218,8 @@ function generateSVG(state, colors = DEFAULT_COLORS, icons = ICONS, extra = null
   const P_voiture = { x: xL, y: yBot };
   const P_solaire = { x: xR, y: yTop };
   const P_export  = { x: xR, y: yBot };
-  const P_extra   = { x: xR, y: yMid };  // optional 6th box, mid-right
+  const P_extra   = { x: xR, y: yMid };  // optional 6th box, mid-right — reserved for battery
+  const P_extra2  = { x: xC, y: yBot };  // optional 7th box, bottom-center (between Voiture and Export)
   const importR  = xL + wStd/2;
   const importB  = yTop + hStd/2;
   const cumulusR = xL + wStd/2;
@@ -206,6 +227,7 @@ function generateSVG(state, colors = DEFAULT_COLORS, icons = ICONS, extra = null
   const solaireB = yTop + hSolar/2;
   const exportT  = yBot - hExport/2;
   const extraL   = xR - wStd/2;
+  const extra2T  = yBot - hStd/2;
 
   const animDur = (w) => {
     if (!isOn(w)) return 0;
@@ -265,9 +287,10 @@ function generateSVG(state, colors = DEFAULT_COLORS, icons = ICONS, extra = null
   const m_top_R = ringExt(maisonR_top, yMid - 85);
   const m_top_L = ringExt(maisonL_top, yMid - 85);
   const m_mid_L = ringExt(maisonL_mid, yMid);
-  const m_mid_R = ringExt(maisonR_mid, yMid);  // for optional extra box
+  const m_mid_R = ringExt(maisonR_mid, yMid);  // for optional extra box (battery slot)
   const m_bot_L = ringExt(maisonL_bot, yMid + 85);
   const m_bot_R = ringExt(maisonR_bot, yMid + 85);
+  const m_bot_C = ringExt(xC, yMid + ringR);   // for optional extra2 box (bottom-center)
 
   const path_solaire_to_maison  = elbow(xR, solaireB + GAP, m_top_R.x, m_top_R.y, false);
   const path_import_to_maison   = elbow(xL, importB + GAP, m_top_L.x, m_top_L.y, false);
@@ -280,6 +303,11 @@ function generateSVG(state, colors = DEFAULT_COLORS, icons = ICONS, extra = null
         ? straight(extraL - GAP, yMid, m_mid_R.x, m_mid_R.y)
         : straight(m_mid_R.x, m_mid_R.y, extraL - GAP, yMid))
     : null;
+  // Second optional box (bottom-center, between Voiture and Export). Always
+  // a pure consumer (mono mode) — flow is always maison → extra2 downwards.
+  const path_maison_to_extra2   = extra2
+    ? straight(m_bot_C.x, m_bot_C.y, xC, extra2T - GAP)
+    : null;
 
   const L_solaire       = { x: 614, y: 258 };
   const L_import        = { x: 266, y: 258 };
@@ -287,6 +315,7 @@ function generateSVG(state, colors = DEFAULT_COLORS, icons = ICONS, extra = null
   const L_voiture       = { x: 266, y: 428 };
   const L_maison_export = { x: 614, y: 428 };
   const L_maison_extra  = { x: 614, y: 342 };  // mirror of L_cumulus
+  const L_maison_extra2 = { x: xC + 80, y: (m_bot_C.y + extra2T) / 2 };  // bottom-center, shifted right so the W label clears the vertical arrow even with 4-digit values
 
   const linkPath = (d, color, w, name) => {
     const active = isOn(w);
@@ -300,11 +329,13 @@ function generateSVG(state, colors = DEFAULT_COLORS, icons = ICONS, extra = null
 
   const wLabel = (L, color, w) => {
     if (!isOn(w)) return "";
-    return `<text x='${L.x}' y='${L.y}' text-anchor='middle' dominant-baseline='middle' fill='${color}' font-size='${F_W_LINE}' font-weight='800' font-family='ui-monospace,monospace' paint-order='stroke' stroke='var(--ha-card-background)' stroke-width='18' stroke-linejoin='round'>${w} <tspan dx='-7'>W</tspan></text>`;
+    // Single text element (no tspan dx) so digits and unit share the exact
+    // same baseline — tspan was causing visual misalignment of the "W".
+    return `<text x='${L.x}' y='${L.y}' text-anchor='middle' dominant-baseline='middle' fill='${color}' font-size='${F_W_LINE}' font-weight='800' font-family='ui-monospace,monospace' paint-order='stroke' stroke='var(--ha-card-background)' stroke-width='18' stroke-linejoin='round'>${w} W</text>`;
   };
 
-  const node = (P, label, w, kwh, color, icon, wEntity, kwhEntity, width=wStd, height=hStd) => `
-<g transform='translate(${P.x}, ${P.y})' class='fec-node' data-w-entity='${wEntity}' data-kwh-entity='${kwhEntity}' style="cursor:pointer;">
+  const node = (P, label, w, kwh, color, icon, wEntity, kwhEntity, nodeKey="", width=wStd, height=hStd) => `
+<g transform='translate(${P.x}, ${P.y})' class='fec-node' data-node-key='${nodeKey}' data-w-entity='${wEntity}' data-kwh-entity='${kwhEntity}' style="cursor:pointer;">
   <rect x='${-width/2}' y='${-height/2}' width='${width}' height='${height}' rx='18' fill='rgba(${color},0.18)' stroke='rgba(${color},0.65)' stroke-width='2'/>
   <foreignObject x='-16' y='${-height/2 + 6}' width='32' height='32' style='overflow:visible;'>
     <div xmlns='http://www.w3.org/1999/xhtml' style='display:flex; justify-content:center; align-items:center; height:32px;'>
@@ -318,12 +349,12 @@ function generateSVG(state, colors = DEFAULT_COLORS, icons = ICONS, extra = null
 
   // Battery box: 4 lines (icon+label, SoC%, ±kW, daily ↑/↓ kWh).
   // activeColor flips between charge_color (charging) and discharge_color (discharging).
-  const nodeBattery = (P, label, icon, soc, netW, chargedKwh, dischargedKwh, direction, activeColor, wEntity, kwhEntity, width=wStd, height=hStd) => {
+  const nodeBattery = (P, label, icon, soc, netW, chargedKwh, dischargedKwh, direction, activeColor, wEntity, kwhEntity, nodeKey="extra", width=wStd, height=hStd) => {
     const sign = direction === "charge" ? "+" : "−";
     const wAbs = Math.abs(netW);
     const kwTxt = wAbs >= 1000 ? (wAbs / 1000).toFixed(1) : (wAbs / 1000).toFixed(2);
     return `
-<g transform='translate(${P.x}, ${P.y})' class='fec-node' data-w-entity='${wEntity}' data-kwh-entity='${kwhEntity}' style="cursor:pointer;">
+<g transform='translate(${P.x}, ${P.y})' class='fec-node' data-node-key='${nodeKey}' data-w-entity='${wEntity}' data-kwh-entity='${kwhEntity}' style="cursor:pointer;">
   <rect x='${-width/2}' y='${-height/2}' width='${width}' height='${height}' rx='18' fill='rgba(${activeColor},0.18)' stroke='rgba(${activeColor},0.65)' stroke-width='2'/>
   <foreignObject x='${-width/2}' y='${-height/2 + 4}' width='${width}' height='24' style='overflow:visible;'>
     <div xmlns='http://www.w3.org/1999/xhtml' style='display:flex; align-items:center; justify-content:center; gap:6px; height:24px; font-family:ui-sans-serif,system-ui,sans-serif;'>
@@ -355,6 +386,10 @@ function generateSVG(state, colors = DEFAULT_COLORS, icons = ICONS, extra = null
     <marker id='arr-extra' viewBox='0 0 10 10' refX='8' refY='5' markerWidth='7' markerHeight='7' orient='auto'><path d='M 0 0 L 10 5 L 0 10 z' fill='#${rgbToHex(xActiveColor)}'/></marker>
     <marker id='arr-extra-dim' viewBox='0 0 10 10' refX='8' refY='5' markerWidth='6' markerHeight='6' orient='auto'><path d='M 0 0 L 10 5 L 0 10 z' fill='#${rgbToHex(xActiveColor)}'/></marker>
     ` : ""}
+    ${extra2 ? `
+    <marker id='arr-extra2' viewBox='0 0 10 10' refX='8' refY='5' markerWidth='7' markerHeight='7' orient='auto'><path d='M 0 0 L 10 5 L 0 10 z' fill='#${rgbToHex(extra2.color)}'/></marker>
+    <marker id='arr-extra2-dim' viewBox='0 0 10 10' refX='8' refY='5' markerWidth='6' markerHeight='6' orient='auto'><path d='M 0 0 L 10 5 L 0 10 z' fill='#${rgbToHex(extra2.color)}'/></marker>
+    ` : ""}
   </defs>
 
   ${enabled.solaire ? linkPath(path_solaire_to_maison, "#" + rgbToHex(colors.solaire), lSolarMaison,   "solaire") : ""}
@@ -363,6 +398,7 @@ function generateSVG(state, colors = DEFAULT_COLORS, icons = ICONS, extra = null
   ${enabled.voiture ? linkPath(path_maison_to_voiture, "#" + rgbToHex(colors.voiture), lMaisonVoiture, "voiture") : ""}
   ${enabled.export  ? linkPath(path_maison_to_export,  "#" + rgbToHex(colors.export),  lMaisonExport,  "export")  : ""}
   ${extra ? linkPath(path_maison_to_extra, "#" + rgbToHex(xActiveColor), lMaisonExtra, "extra") : ""}
+  ${extra2 ? linkPath(path_maison_to_extra2, "#" + rgbToHex(extra2.color), lMaisonExtra2, "extra2") : ""}
 
   ${enabled.solaire ? wLabel(L_solaire,       "#" + rgbToHex(colors.solaire), lSolarMaison)   : ""}
   ${enabled.import  ? wLabel(L_import,        "#" + rgbToHex(colors.import),  lImportMaison)  : ""}
@@ -370,12 +406,13 @@ function generateSVG(state, colors = DEFAULT_COLORS, icons = ICONS, extra = null
   ${enabled.voiture ? wLabel(L_voiture,       "#" + rgbToHex(colors.voiture), lMaisonVoiture) : ""}
   ${enabled.export  ? wLabel(L_maison_export, "#" + rgbToHex(colors.export),  lMaisonExport)  : ""}
   ${extra ? wLabel(L_maison_extra, "#" + rgbToHex(xActiveColor), lMaisonExtra) : ""}
+  ${extra2 ? wLabel(L_maison_extra2, "#" + rgbToHex(extra2.color), lMaisonExtra2) : ""}
 
-  ${enabled.import  ? node(P_import,  labels.import  || DEFAULT_LABELS.import,  iW, iKwh, colors.import,  icons.import,  state.entityIds.grid_import,      state.entityIds.grid_daily_import)  : ""}
-  ${enabled.cumulus ? node(P_cumulus, labels.cumulus || DEFAULT_LABELS.cumulus, cW, cKwh, colors.cumulus, icons.cumulus, state.entityIds.pvrouter_surplus, state.entityIds.pvrouter_daily)     : ""}
-  ${enabled.voiture ? node(P_voiture, labels.voiture || DEFAULT_LABELS.voiture, vW, vKwh, colors.voiture, icons.voiture, state.entityIds.ev_charger_power, state.entityIds.ev_daily)            : ""}
-  ${enabled.solaire ? node(P_solaire, labels.solaire || DEFAULT_LABELS.solaire, sW, sKwh, colors.solaire, icons.solaire, state.entityIds.pv_production,    state.entityIds.pv_daily_kwh,    wSolar,  hSolar)  : ""}
-  ${enabled.export  ? node(P_export,  labels.export  || DEFAULT_LABELS.export,  eW, eKwh, colors.export,  icons.export,  state.entityIds.grid_export,      state.entityIds.grid_daily_export, wExport, hExport) : ""}
+  ${enabled.import  ? node(P_import,  labels.import  || DEFAULT_LABELS.import,  iW, iKwh, colors.import,  icons.import,  state.entityIds.grid_import,      state.entityIds.grid_daily_import,   "import")  : ""}
+  ${enabled.cumulus ? node(P_cumulus, labels.cumulus || DEFAULT_LABELS.cumulus, cW, cKwh, colors.cumulus, icons.cumulus, state.entityIds.pvrouter_surplus, state.entityIds.pvrouter_daily,      "cumulus") : ""}
+  ${enabled.voiture ? node(P_voiture, labels.voiture || DEFAULT_LABELS.voiture, vW, vKwh, colors.voiture, icons.voiture, state.entityIds.ev_charger_power, state.entityIds.ev_daily,            "voiture") : ""}
+  ${enabled.solaire ? node(P_solaire, labels.solaire || DEFAULT_LABELS.solaire, sW, sKwh, colors.solaire, icons.solaire, state.entityIds.pv_production,    state.entityIds.pv_daily_kwh,        "solaire", wSolar,  hSolar)  : ""}
+  ${enabled.export  ? node(P_export,  labels.export  || DEFAULT_LABELS.export,  eW, eKwh, colors.export,  icons.export,  state.entityIds.grid_export,      state.entityIds.grid_daily_export,   "export",  wExport, hExport) : ""}
   ${extra ? (isBattery
       ? nodeBattery(
           P_extra,
@@ -388,14 +425,16 @@ function generateSVG(state, colors = DEFAULT_COLORS, icons = ICONS, extra = null
           xDir,
           xActiveColor,
           state.entityIds.extra_soc || state.entityIds.extra_w,
-          state.entityIds.extra_charged_kwh || state.entityIds.extra_kwh
+          state.entityIds.extra_charged_kwh || state.entityIds.extra_kwh,
+          "extra"
         )
-      : node(P_extra, extra.label || "EXTRA", xW, xKwh, extra.color, extra.icon || "mdi:battery", state.entityIds.extra_w, state.entityIds.extra_kwh)
+      : node(P_extra, extra.label || "EXTRA", xW, xKwh, extra.color, extra.icon || "mdi:battery", state.entityIds.extra_w, state.entityIds.extra_kwh, "extra")
     ) : ""}
+  ${extra2 ? node(P_extra2, extra2.label || "BOX++", x2W, x2Kwh, extra2.color, extra2.icon || "mdi:lightning-bolt", state.entityIds.extra2_w, state.entityIds.extra2_kwh, "extra2") : ""}
 
   ${topLabel && topLabel.text ? `<text x='${xC}' y='${yTop}' text-anchor='middle' dominant-baseline='middle' fill='${normalizeColor(topLabel.color) || "var(--primary-text-color)"}' font-size='${topLabel.font_size || 24}' font-weight='800' letter-spacing='1.5'>${escapeXml(topLabel.text)}</text>` : ""}
 
-  <g transform='translate(${xC}, ${yMid})' class='fec-maison' data-w-entity='${state.entityIds.house_consumption}' data-kwh-entity='${state.entityIds.house_daily_kwh}' style="cursor:pointer;">
+  <g transform='translate(${xC}, ${yMid})' class='fec-maison' data-node-key='maison' data-w-entity='${state.entityIds.house_consumption}' data-kwh-entity='${state.entityIds.house_daily_kwh}' style="cursor:pointer;">
     <circle r='${ringR}' fill='none' stroke='var(--divider-color)' stroke-width='10'/>
     <circle r='${ringR}' fill='none' stroke='${ringColor}' stroke-width='10' stroke-linecap='round' stroke-dasharray='${ringC.toFixed(1)}' stroke-dashoffset='${ringOff.toFixed(1)}' transform='rotate(-90)' style='transition: stroke-dashoffset 800ms cubic-bezier(0.34,1.56,0.64,1), stroke 400ms;'/>
     <foreignObject x='-26' y='-86' width='52' height='52' style='overflow:visible;'>
@@ -427,6 +466,38 @@ function normalizeColor(c) {
   return s;  // already a color (hex, var(...), name, rgb(...), etc.)
 }
 
+// Auto-derive text color from background luminance. Returns null if the bg is a
+// gradient or any non-solid value (caller falls back to theme variables).
+// Uses sRGB relative luminance per WCAG; threshold 0.5.
+function _autoTextFromBg(bg) {
+  if (!bg) return null;
+  const s = String(bg).trim();
+  if (/gradient|var\(|url\(/i.test(s)) return null; // bail on non-solid backgrounds
+  let r, g, b;
+  const hex = s.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    const h = hex[1].length === 3
+      ? hex[1].split("").map(c => c + c).join("")
+      : hex[1];
+    r = parseInt(h.slice(0, 2), 16);
+    g = parseInt(h.slice(2, 4), 16);
+    b = parseInt(h.slice(4, 6), 16);
+  } else {
+    const rgb = s.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+    if (!rgb) return null;
+    [, r, g, b] = rgb.map(Number);
+  }
+  // Relative luminance (rec. 709 weights, simplified — good enough for threshold)
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return lum < 0.5 ? "#f1f5f9" : "#0f172a";
+}
+
+// Dim variant of the main text color for secondary labels (70% mixed toward bg).
+function _dimText(textColor) {
+  if (!textColor) return null;
+  return `color-mix(in srgb, ${textColor} 70%, transparent)`;
+}
+
 // =========================================================================
 // Card element
 // =========================================================================
@@ -441,6 +512,12 @@ class FluxEnergieCard extends LitElement {
   setConfig(config) {
     if (!config.entities) {
       throw new Error("Config requires 'entities' section");
+    }
+    // triggers_update was a button-card v6 directive; v7+ and LitElement cards
+    // (like this one) re-render automatically from hass changes. We silently
+    // accept the key so old YAML imported from the forum doesn't break.
+    if (config.triggers_update !== undefined) {
+      console.debug("flux-energie-card: 'triggers_update' is a no-op here (auto-handled).");
     }
     this._config = config;
   }
@@ -488,6 +565,68 @@ class FluxEnergieCard extends LitElement {
     this.dispatchEvent(evt);
   }
 
+  // Resolve the action config for a given node + interaction kind ("tap" | "hold").
+  //   priority: per-node override (config.nodes[key].{tap_action|hold_action})
+  //          → card-level (config.{tap_action|hold_action})
+  //          → built-in default ({ action: "more-info" })
+  // entityFallback is the entity passed to more-info when no `entity` is set
+  // in the action config (W entity for tap, kWh entity for hold).
+  _resolveAction(nodeKey, kind) {
+    const perNode = nodeKey && this._config?.nodes?.[nodeKey];
+    const key = kind === "hold" ? "hold_action" : "tap_action";
+    return perNode?.[key]
+        ?? this._config?.[key]
+        ?? { action: "more-info" };
+  }
+
+  _handleAction(actionCfg, entityFallback) {
+    if (!actionCfg || actionCfg.action === "none") return;
+    const a = actionCfg.action || "more-info";
+    switch (a) {
+      case "more-info": {
+        const eid = actionCfg.entity || entityFallback;
+        if (!eid) return;
+        const evt = new Event("hass-more-info", { bubbles: true, composed: true });
+        evt.detail = { entityId: eid };
+        this.dispatchEvent(evt);
+        return;
+      }
+      case "toggle": {
+        const eid = actionCfg.entity || entityFallback;
+        if (!eid || !this.hass) return;
+        const domain = eid.split(".")[0];
+        // Domains that support a plain "toggle" service; otherwise fall back to homeassistant.toggle.
+        const TOGGLE_DOMAINS = new Set(["switch","light","fan","input_boolean","automation","script","cover","media_player","humidifier","siren","valve"]);
+        const svcDomain = TOGGLE_DOMAINS.has(domain) ? domain : "homeassistant";
+        this.hass.callService(svcDomain, "toggle", { entity_id: eid });
+        return;
+      }
+      case "navigate": {
+        const p = actionCfg.navigation_path;
+        if (!p) return;
+        window.history.pushState(null, "", p);
+        window.dispatchEvent(new Event("location-changed"));
+        return;
+      }
+      case "url": {
+        const u = actionCfg.url_path;
+        if (!u) return;
+        window.open(u, "_blank", "noopener,noreferrer");
+        return;
+      }
+      case "call-service": {
+        const svc = actionCfg.service;
+        if (!svc || !this.hass) return;
+        const [d, s] = svc.split(".");
+        if (!d || !s) return;
+        this.hass.callService(d, s, actionCfg.service_data || actionCfg.data || {}, actionCfg.target);
+        return;
+      }
+      default:
+        console.warn("flux-energie-card: unknown action type", a);
+    }
+  }
+
   render() {
     if (!this._config || !this.hass) return html``;
     const E = this._config.entities;
@@ -512,6 +651,8 @@ class FluxEnergieCard extends LitElement {
       extra_soc:             this._numF(E.extra_soc),
       extra_charged_kwh:     this._numF(E.extra_charged_kwh),
       extra_discharged_kwh:  this._numF(E.extra_discharged_kwh),
+      extra2_w:              this._num(E.extra2_w),
+      extra2_kwh:            this._numF(E.extra2_kwh),
     };
     const colors = { ...DEFAULT_COLORS, ...(this._config.colors || {}) };
     const icons = { ...ICONS, ...(this._config.icons || {}) };
@@ -519,41 +660,102 @@ class FluxEnergieCard extends LitElement {
     const labels = { ...DEFAULT_LABELS, ...(this._config.labels || {}) };
     const flowStyle = { ...DEFAULT_FLOW_STYLE, ...(this._config.flow_style || {}) };
     const topLabel = this._config.top_label || null;
-    // Optional 6th box: enabled iff any extra_* W sensor is configured (mono needs extra_w;
-    // battery accepts signed extra_w OR extra_charge_w/extra_discharge_w split).
+    // Optional 6th box (battery slot, mid-right): enabled iff any extra_* W sensor
+    // is configured. Optional 7th box (extra2, bottom-center): pure mono mode,
+    // enabled iff extra2_w is configured.
     const extraEnabled = !!(E.extra_w || E.extra_charge_w || E.extra_discharge_w);
     const extra = extraEnabled
       ? { ...DEFAULT_EXTRA, ...(this._config.extra || {}) }
       : null;
-    const svg = generateSVG(state, colors, icons, extra, fonts, labels, topLabel, flowStyle);
-    return html`<ha-card>${_unsafeHTML(svg)}</ha-card>`;
+    const extra2Enabled = !!E.extra2_w;
+    const extra2 = extra2Enabled
+      ? {
+          label: "BOX++",
+          icon:  "mdi:lightning-bolt",
+          color: "59,130,246",
+          ...(this._config.extra2 || {}),
+        }
+      : null;
+    const svg = generateSVG(state, colors, icons, extra, fonts, labels, topLabel, flowStyle, extra2);
+    // Background customization (config.background = any CSS color or full background
+    // shorthand). If set: border auto-tints via CSS color-mix(); text colors
+    // auto-flip via JS luminance probe (only when bg is a simple solid color).
+    // Explicit border_color / text_color overrides win.
+    const bg = this._config.background;
+    const borderOverride = this._config.border_color;
+    const textOverride = this._config.text_color || _autoTextFromBg(bg);
+    // Border auto-derive: tonal lift from bg by mixing 20% of the (already
+    // contrast-correct) text color into the bg. Explicit border_color wins.
+    const borderAuto = (bg && textOverride) ? `color-mix(in srgb, ${bg} 80%, ${textOverride} 20%)` : null;
+    const borderFinal = borderOverride || borderAuto;
+    const cardStyle = [
+      bg ? `--fec-bg: ${bg}` : "",
+      borderFinal ? `--fec-border: ${borderFinal}` : "",
+      textOverride ? `--primary-text-color: ${textOverride}` : "",
+      textOverride ? `--secondary-text-color: ${_dimText(textOverride)}` : "",
+    ].filter(Boolean).join("; ");
+    return html`<ha-card style=${cardStyle}>${_unsafeHTML(svg)}</ha-card>`;
   }
 
-  // Attach click handlers to nodes after render
+  // Attach click handlers to nodes after render.
+  // Behavior:
+  //   • short press   → tap_action  (default: more-info on the W entity)
+  //   • long press 500ms → hold_action (default: more-info on the kWh entity)
+  //   • touchmove > 10px aborts the press so a vertical mobile scroll doesn't
+  //     trigger a popup (forum request — post 79568, pascal_ha).
   updated() {
     const root = this.shadowRoot;
     if (!root) return;
+    const MOVE_THRESHOLD = 10; // px — beyond this the press is considered a scroll
     root.querySelectorAll(".fec-node, .fec-maison").forEach((g) => {
       if (g._fecBound) return;
       g._fecBound = true;
-      let pressTimer = null;
-      let longPressed = false;
+      const nodeKey = g.getAttribute("data-node-key");
       const wEntity = g.getAttribute("data-w-entity");
       const kEntity = g.getAttribute("data-kwh-entity");
-      const start = () => {
+      let pressTimer = null;
+      let longPressed = false;
+      let aborted = false;
+      let startX = 0, startY = 0;
+
+      const start = (clientX, clientY) => {
         longPressed = false;
-        pressTimer = setTimeout(() => { longPressed = true; this._moreInfo(kEntity); }, 500);
+        aborted = false;
+        startX = clientX;
+        startY = clientY;
+        pressTimer = setTimeout(() => {
+          longPressed = true;
+          if (!aborted) this._handleAction(this._resolveAction(nodeKey, "hold"), kEntity);
+        }, 500);
+      };
+      const move = (clientX, clientY) => {
+        if (Math.abs(clientX - startX) > MOVE_THRESHOLD || Math.abs(clientY - startY) > MOVE_THRESHOLD) {
+          aborted = true;
+          clearTimeout(pressTimer);
+        }
       };
       const end = () => {
         clearTimeout(pressTimer);
-        if (!longPressed) this._moreInfo(wEntity);
+        if (!aborted && !longPressed) {
+          this._handleAction(this._resolveAction(nodeKey, "tap"), wEntity);
+        }
         longPressed = false;
+        aborted = false;
       };
-      const cancel = () => { clearTimeout(pressTimer); longPressed = false; };
-      g.addEventListener("mousedown", start);
+      const cancel = () => { clearTimeout(pressTimer); longPressed = false; aborted = true; };
+
+      g.addEventListener("mousedown", (e) => start(e.clientX, e.clientY));
+      g.addEventListener("mousemove", (e) => move(e.clientX, e.clientY));
       g.addEventListener("mouseup", end);
       g.addEventListener("mouseleave", cancel);
-      g.addEventListener("touchstart", start, { passive: true });
+      g.addEventListener("touchstart", (e) => {
+        const t = e.touches[0];
+        if (t) start(t.clientX, t.clientY);
+      }, { passive: true });
+      g.addEventListener("touchmove", (e) => {
+        const t = e.touches[0];
+        if (t) move(t.clientX, t.clientY);
+      }, { passive: true });
       g.addEventListener("touchend", end);
       g.addEventListener("touchcancel", cancel);
     });
@@ -562,10 +764,15 @@ class FluxEnergieCard extends LitElement {
   static get styles() {
     return css`
       ha-card {
-        background: radial-gradient(ellipse at 0% 0%, rgba(148,108,255,0.10), transparent 55%),
-                    radial-gradient(ellipse at 100% 100%, rgba(255,209,102,0.07), transparent 55%),
-                    var(--ha-card-background);
-        border: 1px solid rgba(148,108,255,0.25);
+        /* --fec-bg and --fec-border can be overridden from setConfig
+           (config.background, config.border_color). --fec-border is also
+           auto-derived from --fec-bg via color-mix() when the bg is a single
+           color and no explicit override is provided. */
+        background: var(--fec-bg,
+                    radial-gradient(ellipse at 0% 0%, rgba(148,108,255,0.10), transparent 55%) ,
+                    radial-gradient(ellipse at 100% 100%, rgba(255,209,102,0.07), transparent 55%) ,
+                    var(--ha-card-background));
+        border: 1px solid var(--fec-border, rgba(148,108,255,0.25));
         border-radius: 22px;
         box-shadow: 0 12px 40px rgba(0,0,0,0.5);
         padding: 6px 8px 8px;
@@ -609,6 +816,25 @@ class FluxEnergieCardEditor extends LitElement {
     const newValue = ev.target?.value !== undefined ? ev.target.value : ev.detail?.value;
     const newExtra = { ...(this._config.extra || {}), [key]: newValue };
     const newConfig = { ...this._config, extra: newExtra };
+    this.dispatchEvent(new CustomEvent("config-changed", {
+      detail: { config: newConfig },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  _extra2Changed(key, ev) {
+    if (!this._config) return;
+    const raw = ev.target?.value !== undefined ? ev.target.value : ev.detail?.value;
+    const next = { ...(this._config.extra2 || {}) };
+    if (raw == null || String(raw).trim() === "") {
+      delete next[key];
+    } else {
+      next[key] = String(raw).trim();
+    }
+    const newConfig = { ...this._config };
+    if (Object.keys(next).length === 0) delete newConfig.extra2;
+    else newConfig.extra2 = next;
     this.dispatchEvent(new CustomEvent("config-changed", {
       detail: { config: newConfig },
       bubbles: true,
@@ -685,6 +911,129 @@ class FluxEnergieCardEditor extends LitElement {
     }));
   }
 
+  // Background customization (forum post 79568 / pascal_ha — adds card-level
+  // background color override + auto-tinted border + auto-flipped text colors).
+  _bgChanged(key, ev) {
+    if (!this._config) return;
+    const raw = ev.target?.value !== undefined ? ev.target.value : ev.detail?.value;
+    const newConfig = { ...this._config };
+    if (!raw || raw.trim() === "") delete newConfig[key];
+    else newConfig[key] = raw.trim();
+    this.dispatchEvent(new CustomEvent("config-changed", {
+      detail: { config: newConfig }, bubbles: true, composed: true,
+    }));
+  }
+
+  // Per-node tap_action / hold_action — stored under config.nodes[key][kind].
+  // kind is "tap" or "hold"; field is "action" | "entity" | "navigation_path" |
+  // "url_path" | "service" so the editor can drive a typed second input.
+  _actionChanged(nodeKey, kind, field, ev) {
+    if (!this._config) return;
+    const raw = ev.target?.value !== undefined ? ev.target.value : ev.detail?.value;
+    const cleaned = raw == null ? "" : String(raw).trim();
+    const k = kind === "hold" ? "hold_action" : "tap_action";
+    const allNodes = { ...(this._config.nodes || {}) };
+    const nodeCfg  = { ...(allNodes[nodeKey] || {}) };
+    const actCfg   = { ...(nodeCfg[k] || {}) };
+
+    if (field === "action") {
+      if (!cleaned) {
+        delete nodeCfg[k]; // reset to default
+      } else {
+        actCfg.action = cleaned;
+        nodeCfg[k] = actCfg;
+      }
+    } else {
+      if (cleaned === "") delete actCfg[field];
+      else actCfg[field] = cleaned;
+      // If no action set yet, default to more-info so the param has meaning.
+      if (!actCfg.action) actCfg.action = "more-info";
+      nodeCfg[k] = actCfg;
+    }
+    // Clean up: drop empty node entry
+    if (Object.keys(nodeCfg).length === 0) {
+      delete allNodes[nodeKey];
+    } else {
+      allNodes[nodeKey] = nodeCfg;
+    }
+    const newConfig = { ...this._config };
+    if (Object.keys(allNodes).length === 0) delete newConfig.nodes;
+    else newConfig.nodes = allNodes;
+
+    this.dispatchEvent(new CustomEvent("config-changed", {
+      detail: { config: newConfig }, bubbles: true, composed: true,
+    }));
+  }
+
+  // Per-node Interactions block — renders inside each node's expanded body.
+  // Two rows (tap / hold) with an action-type <select> and one context-sensitive
+  // text input whose label changes based on the chosen action.
+  _renderInteractions(nodeKey) {
+    const ACTION_OPTS = [
+      { value: "",             label: "⚙ Défaut (more-info)" },
+      { value: "more-info",    label: "Plus d'infos" },
+      { value: "toggle",       label: "Toggle" },
+      { value: "navigate",     label: "Naviguer" },
+      { value: "url",          label: "Ouvrir URL" },
+      { value: "call-service", label: "Service" },
+      { value: "none",         label: "Aucune" },
+    ];
+    const paramFor = (act) => {
+      switch (act) {
+        case "more-info":
+        case "toggle":       return { label: "Entité (override)", field: "entity",          placeholder: "sensor.xxx" };
+        case "navigate":     return { label: "Chemin de navigation", field: "navigation_path", placeholder: "/lovelace/energy" };
+        case "url":          return { label: "URL", field: "url_path", placeholder: "https://..." };
+        case "call-service": return { label: "Service", field: "service", placeholder: "switch.toggle" };
+        default:             return null;
+      }
+    };
+    const tap  = (this._config?.nodes?.[nodeKey]?.tap_action)  || {};
+    const hold = (this._config?.nodes?.[nodeKey]?.hold_action) || {};
+    const row = (kind, act) => {
+      const param = paramFor(act.action);
+      return html`
+        <label class="field">
+          <span class="field-label">${kind === "tap" ? "Tap (court appui)" : "Hold (long appui 500ms)"}</span>
+          <select
+            class="field-input"
+            .value=${act.action || ""}
+            @change=${(ev) => this._actionChanged(nodeKey, kind, "action", ev)}
+          >
+            ${ACTION_OPTS.map(o => html`<option value=${o.value} ?selected=${(act.action || "") === o.value}>${o.label}</option>`)}
+          </select>
+        </label>
+        ${param ? html`
+          <label class="field">
+            <span class="field-label">${param.label}</span>
+            <input
+              class="field-input"
+              type="text"
+              .value=${act[param.field] || ""}
+              placeholder=${param.placeholder}
+              @input=${(ev) => this._actionChanged(nodeKey, kind, param.field, ev)}
+            />
+          </label>
+        ` : ""}
+      `;
+    };
+    return html`
+      <details class="interactions-row">
+        <summary class="interactions-summary">
+          <ha-icon icon="mdi:gesture-tap"></ha-icon>
+          <span>Interactions</span>
+          ${(tap.action || hold.action) ? html`<span class="optional-tag">override</span>` : ""}
+          <ha-icon class="node-chevron" icon="mdi:chevron-down"></ha-icon>
+        </summary>
+        <div class="interactions-body">
+          <div class="hint">Comportement au tap (court) et au hold (long appui). Laisse "Défaut" pour garder le comportement standard (more-info sur W au tap, sur kWh au hold).</div>
+          ${row("tap", tap)}
+          ${row("hold", hold)}
+        </div>
+      </details>
+    `;
+  }
+
   _topLabelChanged(key, ev) {
     if (!this._config) return;
     const raw = ev.target?.value !== undefined ? ev.target.value : ev.detail?.value;
@@ -709,6 +1058,7 @@ class FluxEnergieCardEditor extends LitElement {
     if (!this._config) return html``;
     const E = this._config.entities || {};
     const X = this._config.extra || {};
+    const X2 = this._config.extra2 || {};
     const F = this._config.fonts || {};
     const C = this._config.colors || {};
     const I = this._config.icons || {};
@@ -849,7 +1199,7 @@ class FluxEnergieCardEditor extends LitElement {
         ],
       },
       {
-        key: "extra", title: "Box additionnelle (Box+)", appearance: "full", isExtra: true,
+        key: "extra", title: "Box additionnelle (Box+) — mi-droite, compatible batterie", appearance: "full", isExtra: true,
         sensors: [
           { key: "extra_w",   label: "Box+ — puissance (W)",    group: "power" },
           { key: "extra_kwh", label: "Box+ — énergie (kWh)",    group: "energy" },
@@ -863,27 +1213,35 @@ class FluxEnergieCardEditor extends LitElement {
           { key: "extra_discharged_kwh", label: "Déchargé journalier (kWh)",                    group: "energy" },
         ],
       },
+      {
+        key: "extra2", title: "Box additionnelle (Box++) — bas-centre", appearance: "full", isExtra2: true,
+        sensors: [
+          { key: "extra2_w",   label: "Box++ — puissance (W)",    group: "power" },
+          { key: "extra2_kwh", label: "Box++ — énergie (kWh)",    group: "energy" },
+        ],
+      },
     ];
 
     const renderNode = (node) => {
       const isExtra = !!node.isExtra;
+      const isExtra2 = !!node.isExtra2;
       const extraType = isExtra ? (X.type || "mono") : null;
       const isBatteryNode = extraType === "battery";
-      const labelVal = isExtra ? (X.label || "") : (L[node.key] || "");
-      const colorVal = isExtra ? (X.color || "") : (C[node.key] || "");
-      const iconVal  = isExtra ? (X.icon  || "") : (I[node.key] || "");
-      const labelDefault = isExtra ? (isBatteryNode ? "BATTERIE" : "ex. CUMULUS") : (DEFAULT_LABELS[node.key] || "");
-      const colorDefault = isExtra ? "100,116,139"  : (DEFAULT_COLORS[node.key] || "");
-      const iconDefault  = isExtra ? (isBatteryNode ? "mdi:battery" : "mdi:battery") : (ICONS[node.key] || "mdi:circle");
-      const labelHandler = isExtra
-        ? (ev) => this._extraChanged("label", ev)
-        : (ev) => this._labelChanged(node.key, ev);
-      const colorHandler = isExtra
-        ? (ev) => this._extraChanged("color", ev)
-        : (ev) => this._colorChanged(node.key, ev);
-      const iconHandler  = isExtra
-        ? (ev) => this._extraChanged("icon", ev)
-        : (ev) => this._iconChanged(node.key, ev);
+      const labelVal = isExtra ? (X.label || "") : isExtra2 ? (X2.label || "") : (L[node.key] || "");
+      const colorVal = isExtra ? (X.color || "") : isExtra2 ? (X2.color || "") : (C[node.key] || "");
+      const iconVal  = isExtra ? (X.icon  || "") : isExtra2 ? (X2.icon  || "") : (I[node.key] || "");
+      const labelDefault = isExtra ? (isBatteryNode ? "BATTERIE" : "ex. CUMULUS") : isExtra2 ? "ex. FRIGO" : (DEFAULT_LABELS[node.key] || "");
+      const colorDefault = isExtra ? "100,116,139"  : isExtra2 ? "59,130,246"   : (DEFAULT_COLORS[node.key] || "");
+      const iconDefault  = isExtra ? "mdi:battery" : isExtra2 ? "mdi:lightning-bolt" : (ICONS[node.key] || "mdi:circle");
+      const labelHandler = isExtra  ? (ev) => this._extraChanged("label", ev)
+                         : isExtra2 ? (ev) => this._extra2Changed("label", ev)
+                         :            (ev) => this._labelChanged(node.key, ev);
+      const colorHandler = isExtra  ? (ev) => this._extraChanged("color", ev)
+                         : isExtra2 ? (ev) => this._extra2Changed("color", ev)
+                         :            (ev) => this._colorChanged(node.key, ev);
+      const iconHandler  = isExtra  ? (ev) => this._extraChanged("icon", ev)
+                         : isExtra2 ? (ev) => this._extra2Changed("icon", ev)
+                         :            (ev) => this._iconChanged(node.key, ev);
 
       const summaryIcon = iconVal || iconDefault;
       const sensorsToShow = (isExtra && isBatteryNode) ? node.batterySensors : node.sensors;
@@ -902,6 +1260,7 @@ class FluxEnergieCardEditor extends LitElement {
               <div class="node-summary-title">
                 ${node.title}
                 ${isExtra ? html`<span class="optional-tag">${isBatteryNode ? "batterie" : "mono"}</span>` : ""}
+                ${isExtra2 ? html`<span class="optional-tag">mono</span>` : ""}
               </div>
               <div class="node-summary-info">${summaryText}</div>
             </div>
@@ -943,6 +1302,8 @@ class FluxEnergieCardEditor extends LitElement {
                 ></ha-icon-picker>
               </label>
             ` : ""}
+
+            ${this._renderInteractions(node.key)}
           </div>
         </details>
       `;
@@ -962,6 +1323,20 @@ class FluxEnergieCardEditor extends LitElement {
         <div class="section-title">Nodes</div>
         <div class="hint">Clique sur une ligne pour configurer ses sensors et son apparence. Vide les <strong>deux</strong> sensors d'un node pour le masquer sur la carte (Maison reste obligatoire).</div>
         ${NODES.map(renderNode)}
+
+        <details class="advanced-row">
+          <summary class="advanced-summary">
+            <ha-icon icon="mdi:palette"></ha-icon>
+            <span>Apparence carte</span>
+            <ha-icon class="node-chevron" icon="mdi:chevron-down"></ha-icon>
+          </summary>
+          <div class="advanced-body">
+            <div class="hint">Couleur de fond de la carte. La bordure et la couleur du texte s'adaptent automatiquement (override possible).</div>
+            ${colorField("Couleur de fond", this._config.background || "", "transparent", (ev) => this._bgChanged("background", ev))}
+            ${colorField("Bordure (override)", this._config.border_color || "", "auto", (ev) => this._bgChanged("border_color", ev))}
+            ${colorField("Texte (override)", this._config.text_color || "", "auto", (ev) => this._bgChanged("text_color", ev))}
+          </div>
+        </details>
 
         <details class="advanced-row">
           <summary class="advanced-summary">
@@ -1017,6 +1392,26 @@ class FluxEnergieCardEditor extends LitElement {
         padding-bottom: 5px;
       }
       .field-input::placeholder { color: var(--secondary-text-color); opacity: 0.6; }
+      /* Native <select> dropdown options follow OS color-scheme by default. Force
+         the HA dark theme palette so the popup is legible. */
+      select.field-input {
+        color-scheme: light dark;
+        appearance: none;
+        -webkit-appearance: none;
+        background-image:
+          linear-gradient(45deg, transparent 50%, var(--primary-text-color) 50%),
+          linear-gradient(135deg, var(--primary-text-color) 50%, transparent 50%);
+        background-position:
+          calc(100% - 16px) 50%,
+          calc(100% - 11px) 50%;
+        background-size: 5px 5px, 5px 5px;
+        background-repeat: no-repeat;
+        padding-right: 28px;
+      }
+      select.field-input option {
+        background: var(--card-background-color, #1f1f1f);
+        color: var(--primary-text-color, #f0f0f0);
+      }
 
       /* Collapsible node rows */
       .node-row, .advanced-row {
@@ -1059,6 +1454,38 @@ class FluxEnergieCardEditor extends LitElement {
       .advanced-summary > ha-icon:first-child { --mdc-icon-size: 22px; color: var(--primary-text-color); }
       .advanced-summary > span { flex: 1; font-size: 14px; color: var(--primary-text-color); }
       .advanced-row { margin-top: 12px; }
+
+      /* Interactions row inside a node body — nested look, lighter than the node itself. */
+      .interactions-row {
+        border: 1px dashed var(--divider-color);
+        border-radius: 6px;
+        background: var(--card-background-color, transparent);
+        margin-top: 4px;
+      }
+      .interactions-row[open] { background: var(--secondary-background-color, rgba(127,127,127,0.05)); }
+      .interactions-summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 8px 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        user-select: none;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--primary-text-color);
+      }
+      .interactions-summary::-webkit-details-marker { display: none; }
+      .interactions-summary > ha-icon:first-child { --mdc-icon-size: 18px; color: var(--secondary-text-color); }
+      .interactions-summary > span { flex: 1; }
+      .interactions-row[open] .node-chevron { transform: rotate(180deg); }
+      .interactions-body {
+        padding: 6px 10px 12px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        border-top: 1px dashed var(--divider-color);
+      }
 
       /* Color picker */
       .color-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
